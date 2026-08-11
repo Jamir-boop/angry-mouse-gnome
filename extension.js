@@ -36,10 +36,6 @@ export default class AngryMouseExtension extends Extension {
         this._doubleHoldTimeoutId = 0;
 
         this._actor = new Clutter.Actor({reactive: false, visible: false});
-        this._actor.connect('destroy', () => {
-            this._actor = null;
-            this._contentReady = false;
-        });
         Main.uiGroup.add_child(this._actor);
 
         this._settingsSignal = this._settings.connect('changed', (_settings, key) =>
@@ -61,8 +57,14 @@ export default class AngryMouseExtension extends Extension {
     }
 
     disable() {
-        this._clearSource('_shakeTimeoutId');
-        this._clearSource('_doubleHoldTimeoutId');
+        if (this._shakeTimeoutId) {
+            GLib.Source.remove(this._shakeTimeoutId);
+            this._shakeTimeoutId = 0;
+        }
+        if (this._doubleHoldTimeoutId) {
+            GLib.Source.remove(this._doubleHoldTimeoutId);
+            this._doubleHoldTimeoutId = 0;
+        }
         if (this._pointerWatch)
             this._pointerWatch.remove();
         if (this._keySignal)
@@ -80,6 +82,7 @@ export default class AngryMouseExtension extends Extension {
             this._actor.destroy();
 
         this._actor = null;
+        this._contentReady = false;
         this._settings = null;
         this._mouseSettings = null;
         this._cursorTracker = null;

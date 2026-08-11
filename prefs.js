@@ -8,6 +8,7 @@ import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/ex
 export default class AngryMousePreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
         this._settings = this.getSettings();
+        this._settingsSignalIds = [];
         window.set_default_size(640, 720);
 
         const cursorPage = new Adw.PreferencesPage({
@@ -73,6 +74,16 @@ export default class AngryMousePreferences extends ExtensionPreferences {
         keyboardSwitch.connect('notify::active', sync);
         methodRow.connect('notify::selected', sync);
         sync();
+
+        window.connect('close-request', () => {
+            for (const id of this._settingsSignalIds)
+                this._settings.disconnect(id);
+            this._settingsSignalIds = null;
+            this._shortcutLabel = null;
+            this._recordingModifiers = null;
+            this._settings = null;
+            return false;
+        });
     }
 
     _spinRow(title, key, lower, upper, step, digits, suffix = '') {
@@ -97,11 +108,11 @@ export default class AngryMousePreferences extends ExtensionPreferences {
         const row = new Adw.ComboRow({title, model: Gtk.StringList.new(choices)});
         row.selected = this._settings.get_enum(key);
         row.connect('notify::selected', () => this._settings.set_enum(key, row.selected));
-        this._settings.connect(`changed::${key}`, () => {
+        this._settingsSignalIds.push(this._settings.connect(`changed::${key}`, () => {
             const selected = this._settings.get_enum(key);
             if (row.selected !== selected)
                 row.selected = selected;
-        });
+        }));
         return row;
     }
 
@@ -123,8 +134,9 @@ export default class AngryMousePreferences extends ExtensionPreferences {
             const key = this._settings.get_string('hotkey-key');
             this._shortcutLabel.accelerator = this._accelerator(modifiers, key);
         };
-        this._settings.connect('changed::hotkey-modifiers', syncLabel);
-        this._settings.connect('changed::hotkey-key', syncLabel);
+        this._settingsSignalIds.push(
+            this._settings.connect('changed::hotkey-modifiers', syncLabel),
+            this._settings.connect('changed::hotkey-key', syncLabel));
         syncLabel();
 
         const controller = new Gtk.EventControllerKey();
