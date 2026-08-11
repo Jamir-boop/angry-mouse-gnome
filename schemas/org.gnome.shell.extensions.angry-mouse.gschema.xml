@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <enum id="org.gnome.shell.extensions.angry-mouse.ActivationMode">
+    <value nick="hold" value="0"/>
+    <value nick="toggle" value="1"/>
+  </enum>
+  <enum id="org.gnome.shell.extensions.angry-mouse.ActivationMethod">
+    <value nick="shortcut" value="0"/>
+    <value nick="double-left-control" value="1"/>
+    <value nick="double-right-control" value="2"/>
+    <value nick="double-either-control" value="3"/>
+  </enum>
+  <schema id="org.gnome.shell.extensions.angry-mouse" path="/org/gnome/shell/extensions/angry-mouse/">
+    <key name="cursor-size" type="d">
+      <range min="2.0" max="10.0"/>
+      <default>8.0</default>
+      <summary>Cursor size</summary>
+      <description>Animated cursor height on the original 2 to 10 scale.</description>
+    </key>
+    <key name="animation-duration-ms" type="i">
+      <range min="50" max="1000"/>
+      <default>150</default>
+      <summary>Animation duration</summary>
+      <description>Time in milliseconds for cursor show and hide animations.</description>
+    </key>
+    <key name="visible-duration-ms" type="i">
+      <range min="100" max="3000"/>
+      <default>1000</default>
+      <summary>Shake visibility duration</summary>
+      <description>Time in milliseconds to keep the cursor visible after shaking stops.</description>
+    </key>
+    <key name="hide-system-cursor" type="b">
+      <default>false</default>
+      <summary>Hide system cursor</summary>
+      <description>Hide the normal pointer while the animated cursor is visible.</description>
+    </key>
+    <key name="shake-enabled" type="b">
+      <default>true</default>
+      <summary>Enable mouse shake</summary>
+      <description>Reveal the cursor after a fast back-and-forth mouse movement.</description>
+    </key>
+    <key name="keyboard-enabled" type="b">
+      <default>true</default>
+      <summary>Enable keyboard activation</summary>
+      <description>Reveal the cursor using a shortcut or double Control press.</description>
+    </key>
+    <key name="activation-mode" enum="org.gnome.shell.extensions.angry-mouse.ActivationMode">
+      <default>'hold'</default>
+      <summary>Activation mode</summary>
+      <description>Hold shows the cursor while active; toggle changes it on each activation.</description>
+    </key>
+    <key name="activation-method" enum="org.gnome.shell.extensions.angry-mouse.ActivationMethod">
+      <default>'shortcut'</default>
+      <summary>Keyboard activation method</summary>
+      <description>Use a regular shortcut or a double press of a Control key.</description>
+    </key>
+    <key name="require-super" type="b">
+      <default>false</default>
+      <summary>Require Super</summary>
+      <description>Require Super to be held during double Control activation.</description>
+    </key>
+    <key name="hotkey-modifiers" type="s">
+      <default>'Control'</default>
+      <summary>Shortcut modifiers</summary>
+      <description>Canonical modifier names joined by plus signs.</description>
+    </key>
+    <key name="hotkey-key" type="s">
+      <default>'None'</default>
+      <summary>Shortcut key</summary>
+      <description>Optional A-Z, 0-9, F1-F12, Space, or Escape shortcut key.</description>
+    </key>
+    <key name="shake-window-ms" type="i">
+      <range min="100" max="2000"/>
+      <default>200</default>
+      <summary>Shake tracking interval</summary>
+      <description>Recent movement window used for shake detection in milliseconds.</description>
+    </key>
+    <key name="shake-minimum-speed" type="d">
+      <range min="0.2" max="5.0"/>
+      <default>0.5</default>
+      <summary>Minimum shake speed</summary>
+      <description>Average pointer speed required for a shake in logical pixels per millisecond.</description>
+    </key>
+    <key name="shake-minimum-turns" type="i">
+      <range min="1" max="12"/>
+      <default>2</default>
+      <summary>Minimum shake turns</summary>
+      <description>Number of sharp direction reversals required for a shake.</description>
+    </key>
+  </schema>
+</schemalist>
