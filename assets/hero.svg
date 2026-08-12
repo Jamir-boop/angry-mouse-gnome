@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="520" viewBox="0 0 1400 520" role="img" aria-labelledby="title description">
+  <title id="title">Angry Mouse</title>
+  <desc id="description">A large cursor with a glowing red laser trail on a dark background.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="0.55" stop-color="#18122b"/>
+      <stop offset="1" stop-color="#260d18"/>
+    </linearGradient>
+    <linearGradient id="laser" x1="0" y1="0" x2="1" y2="0">
+      <stop stop-color="#ff2d55" stop-opacity="0"/>
+      <stop offset="0.35" stop-color="#ff2d55"/>
+      <stop offset="1" stop-color="#ff7a90"/>
+    </linearGradient>
+    <radialGradient id="glow">
+      <stop stop-color="#ff2d55" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#ff2d55" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="44" height="44" patternUnits="userSpaceOnUse">
+      <path d="M44 0H0V44" fill="none" stroke="#ffffff" stroke-opacity="0.035"/>
+    </pattern>
+    <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#000000" flood-opacity="0.55"/>
+    </filter>
+    <filter id="softGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="14"/>
+    </filter>
+  </defs>
+
+  <rect width="1400" height="520" rx="32" fill="url(#background)"/>
+  <rect width="1400" height="520" rx="32" fill="url(#grid)"/>
+  <circle cx="1160" cy="250" r="270" fill="url(#glow)"/>
+
+  <g transform="translate(92 93)">
+    <text x="0" y="88" fill="#ffffff" font-family="Inter, Cantarell, system-ui, sans-serif" font-size="82" font-weight="800" letter-spacing="-3">Angry Mouse</text>
+    <text x="3" y="148" fill="#cbd5e1" font-family="Inter, Cantarell, system-ui, sans-serif" font-size="28">Never lose your pointer. Draw attention when it matters.</text>
+
+    <g transform="translate(0 215)" font-family="Inter, Cantarell, system-ui, sans-serif" font-size="20" font-weight="600">
+      <rect width="218" height="58" rx="29" fill="#ffffff" fill-opacity="0.09" stroke="#ffffff" stroke-opacity="0.14"/>
+      <circle cx="31" cy="29" r="8" fill="#fbbf24"/>
+      <text x="52" y="36" fill="#f8fafc">Shake to reveal</text>
+
+      <g transform="translate(235)">
+        <rect width="302" height="58" rx="29" fill="#ff2d55" fill-opacity="0.12" stroke="#ff6680" stroke-opacity="0.35"/>
+        <circle cx="31" cy="29" r="8" fill="#ff4667"/>
+        <text x="52" y="36" fill="#ffe4e9">Ctrl+Alt · drag to laser</text>
+      </g>
+    </g>
+  </g>
+
+  <g aria-hidden="true">
+    <path d="M785 402C864 379 907 315 984 324c79 9 98 82 180 62 58-14 75-71 129-79" fill="none" stroke="#ff2d55" stroke-opacity="0.22" stroke-width="36" stroke-linecap="round" filter="url(#softGlow)"/>
+    <path d="M785 402C864 379 907 315 984 324c79 9 98 82 180 62 58-14 75-71 129-79" fill="none" stroke="url(#laser)" stroke-width="10" stroke-linecap="round"/>
+    <circle cx="1293" cy="307" r="13" fill="#fff0f3"/>
+    <circle cx="1293" cy="307" r="28" fill="none" stroke="#ff607c" stroke-opacity="0.5" stroke-width="3"/>
+
+    <g transform="translate(935 72) rotate(-8)" filter="url(#shadow)">
+      <path d="M22 0 188 154l-74 8 44 91-50 24-43-91-53 54z" fill="#ffffff" stroke="#111827" stroke-width="12" stroke-linejoin="round"/>
+      <path d="m81 161 30 64 18-9-30-63 52-6L32 36l-6 165z" fill="#e2e8f0" fill-opacity="0.58"/>
+    </g>
+  </g>
+
+  <text x="1308" y="472" text-anchor="end" fill="#94a3b8" font-family="Inter, Cantarell, system-ui, sans-serif" font-size="18">GNOME Shell 48 · Wayland + X11 · MIT</text>
+</svg>
