@@ -10,6 +10,7 @@ cursor shapes continue to work.
 - Fast back-and-forth mouse shake detection
 - Hold or toggle activation
 - Configurable shortcut or double-Control activation
+- Pass-through laser pointer with configurable hold/toggle modifier shortcut
 - Optional hiding of the normal system cursor while active
 - Native GNOME preferences with the original applicable defaults and ranges
 - X11 and Wayland support through GNOME Shell APIs
@@ -34,6 +35,12 @@ Install the generated ZIP for the current user:
 
 ```sh
 gnome-extensions install --force dist/angry-mouse@rattlepop.click.shell-extension.zip
+```
+
+Follow focused runtime diagnostics in the GNOME journal:
+
+```sh
+journalctl --user -f -o cat | grep --line-buffered '\[Angry Mouse\]'
 ```
 
 Log out and back in after the first installation, then enable and configure it:

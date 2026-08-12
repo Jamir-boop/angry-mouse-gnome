@@ -100,3 +100,122 @@ export class DoubleControlTracker {
         this.reset();
     }
 }
+
+const LASER_MAXIMUM_WIDTH = 4;
+const LASER_TAPER_LENGTH = 50;
+const LASER_LIFETIME_MS = 1000;
+const LASER_SMOOTHING = 0.6;
+
+function easeOutQuart(value) {
+    const inverse = 1 - Math.max(0, Math.min(1, value));
+    const squared = inverse * inverse;
+    return 1 - squared * squared;
+}
+
+export function laserSegmentWidth(timestamp, now, index, length) {
+    const time = Math.max(0, 1 - (now - timestamp) / LASER_LIFETIME_MS);
+    const taper = (LASER_TAPER_LENGTH - Math.min(LASER_TAPER_LENGTH, length - index)) /
+        LASER_TAPER_LENGTH;
+    return LASER_MAXIMUM_WIDTH * Math.min(easeOutQuart(taper), easeOutQuart(time));
+}
+
+export class LaserTrail {
+    constructor() {
+        this._segmentPool = [];
+        this._segments = [];
+        this.clear();
+    }
+
+    clear() {
+        this._strokes = [];
+        this._activeStroke = null;
+        this._segments.length = 0;
+    }
+
+    start(x, y, time) {
+        this._prune(time);
+        this._activeStroke = {last: {x, y}, samples: [{x, y, time}]};
+        this._strokes.push(this._activeStroke);
+    }
+
+    add(x, y, time) {
+        if (!this._activeStroke)
+            return false;
+
+        this._prune(time);
+        const previous = this._activeStroke.last;
+        const point = {
+            x: previous.x + (x - previous.x) * LASER_SMOOTHING,
+            y: previous.y + (y - previous.y) * LASER_SMOOTHING,
+            time,
+        };
+        if (point.x === previous.x && point.y === previous.y)
+            return false;
+
+        this._activeStroke.last = point;
+        this._activeStroke.samples.push(point);
+        return true;
+    }
+
+    end(x, y, time) {
+        if (!this._activeStroke)
+            return;
+
+        this.add(x, y, time);
+        if (this._activeStroke.samples.length < 2)
+            this._strokes.splice(this._strokes.indexOf(this._activeStroke), 1);
+        this._activeStroke = null;
+    }
+
+    segments(now) {
+        this._prune(now);
+        this._segments.length = 0;
+        let count = 0;
+        for (const stroke of this._strokes) {
+            for (let i = 1; i < stroke.samples.length; i++) {
+                const end = stroke.samples[i];
+                const width = laserSegmentWidth(end.time, now, i, stroke.samples.length);
+                if (width <= 0)
+                    continue;
+                const segment = this._segmentPool[count] ??
+                    (this._segmentPool[count] = {start: null, end: null, width: 0});
+                segment.start = stroke.samples[i - 1];
+                segment.end = end;
+                segment.width = width;
+                this._segments.push(segment);
+                count++;
+            }
+        }
+        return this._segments;
+    }
+
+    _prune(now) {
+        for (let i = this._strokes.length - 1; i >= 0; i--) {
+            const stroke = this._strokes[i];
+            while (stroke.samples.length && now - stroke.samples[0].time >= LASER_LIFETIME_MS)
+                stroke.samples.shift();
+            if (stroke !== this._activeStroke && stroke.samples.length < 2)
+                this._strokes.splice(i, 1);
+        }
+    }
+}
+
+export class LaserActivation {
+    constructor() {
+        this.reset();
+    }
+
+    reset(shortcutPressed = false) {
+        this._shortcutPressed = shortcutPressed;
+        this._active = false;
+    }
+
+    update(mode, shortcutPressed) {
+        if (mode === 0)
+            this._active = shortcutPressed;
+        else if (shortcutPressed && !this._shortcutPressed)
+            this._active = !this._active;
+        this._shortcutPressed = shortcutPressed;
+        return this._active;
+    }
+}

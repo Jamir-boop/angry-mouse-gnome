@@ -1,26 +1,58 @@
+import Cairo from 'cairo';
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import GObject from 'gi://GObject';
+import Shell from 'gi://Shell';
+import St from 'gi://St';
 
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PointerWatcher from 'resource:///org/gnome/shell/ui/pointerWatcher.js';
+import * as QuickSettings from 'resource:///org/gnome/shell/ui/quickSettings.js';
 
-import {DoubleControlTracker, ShakeDetector} from './engine.js';
+import {DoubleControlTracker, LaserActivation, LaserTrail, ShakeDetector} from './engine.js';
 
 const TRIGGER_KEYS = new Set([
     'shake-enabled', 'keyboard-enabled', 'activation-mode', 'activation-method',
     'require-super', 'hotkey-modifiers', 'hotkey-key', 'shake-window-ms',
     'shake-minimum-speed', 'shake-minimum-turns',
 ]);
+const LOG_PREFIX = '[Angry Mouse]';
+const LASER_MODIFIER_MASK = Clutter.ModifierType.CONTROL_MASK |
+    Clutter.ModifierType.MOD1_MASK | Clutter.ModifierType.SHIFT_MASK;
+
+function logEvent(event, fields = {}) {
+    const details = Object.entries(fields)
+        .map(([key, value]) => `${key}=${JSON.stringify(value)}`).join(' ');
+    console.log(`${LOG_PREFIX} event=${event}${details ? ` ${details}` : ''}`);
+}
+
+const LaserIndicator = GObject.registerClass(
+class LaserIndicator extends QuickSettings.SystemIndicator {
+    _init() {
+        super._init();
+        this._icon = this._addIndicator();
+        this._icon.icon_name = 'selection-mode-symbolic';
+        this._icon.visible = false;
+    }
+
+    setActive(active) {
+        this._icon.visible = active;
+    }
+});
 
 export default class AngryMouseExtension extends Extension {
     enable() {
+        this._lastErrors = new Map();
         this._settings = this.getSettings();
+        logEvent('enable-start');
         this._mouseSettings = new Gio.Settings({schema_id: 'org.gnome.desktop.peripherals.mouse'});
         this._cursorTracker = global.backend.get_cursor_tracker();
         this._shakeDetector = new ShakeDetector();
         this._doubleControl = new DoubleControlTracker();
+        this._laserActivation = new LaserActivation();
+        this._laserTrail = new LaserTrail();
         this._pressed = new Set();
         this._shakeGestureActive = false;
         this._shakeHeld = false;
@@ -34,29 +66,63 @@ export default class AngryMouseExtension extends Extension {
         this._animationSerial = 0;
         this._shakeTimeoutId = 0;
         this._doubleHoldTimeoutId = 0;
+        this._laserTimerId = 0;
+        this._laserPollId = 0;
+        this._laserActive = false;
+        this._laserShortcutPressed = false;
+        this._laserEnabled = false;
+        this._laserMode = 0;
+        this._laserModifierMask = 0;
+        this._laserShortcutName = 'None';
+        this._laserLeftButtonDown = false;
+        this._laserSegments = [];
+        this._laserArea = null;
+        this._laserRepaintSignal = 0;
+        this._laserOriginX = 0;
+        this._laserOriginY = 0;
+
+        this._refreshLaserSettings();
+        this._laserShortcutPressed = this._laserShortcutIsPressed();
+        this._laserActivation.reset(this._laserShortcutPressed);
 
         this._actor = new Clutter.Actor({reactive: false, visible: false});
         Main.uiGroup.add_child(this._actor);
 
         this._settingsSignal = this._settings.connect('changed', (_settings, key) =>
-            this._onSettingChanged(key));
+            this._guard('settings-changed', () => this._onSettingChanged(key)));
         this._cursorSignal = this._cursorTracker.connect('cursor-changed', () =>
             this._refreshCursor());
         this._visibilitySignal = this._cursorTracker.connect('visibility-changed', () =>
             this._enforcePointerVisibility());
         this._keySignal = global.stage.connect('captured-event', (_actor, event) =>
-            this._onCapturedEvent(event));
+            this._guard('captured-event', () => this._onCapturedEvent(event),
+                Clutter.EVENT_PROPAGATE));
+        this._monitorSignal = Main.layoutManager.connect('monitors-changed', () =>
+            this._guard('monitors-changed', () => this._resetLaser('monitors-changed')));
+        this._workspaceSignal = global.workspace_manager.connect('active-workspace-changed', () =>
+            this._guard('workspace-changed', () => this._resetLaser('workspace-changed')));
         this._pointerWatch = PointerWatcher.getPointerWatcher().addWatch(10, (x, y) =>
-            this._onPointerMoved(x, y));
+            this._guard('pointer-moved', () => this._onPointerMoved(x, y)));
+        this._laserIndicator = new LaserIndicator();
+        Main.panel.statusArea.quickSettings.addExternalIndicator(this._laserIndicator);
+        this._syncLaserPoll();
 
         this._refreshCursor();
         const [x, y] = global.get_pointer();
         this._lastX = x;
         this._lastY = y;
         this._positionCursor();
+        logEvent('enabled', {
+            laserEnabled: this._laserEnabled,
+            laserMode: this._laserMode === 0 ? 'hold' : 'toggle',
+            laserShortcut: this._laserShortcutName,
+        });
     }
 
     disable() {
+        logEvent('disable-start');
+        this._setLaserActive(false);
+        this._clearSource('_laserPollId');
         if (this._shakeTimeoutId) {
             GLib.Source.remove(this._shakeTimeoutId);
             this._shakeTimeoutId = 0;
@@ -69,15 +135,22 @@ export default class AngryMouseExtension extends Extension {
             this._pointerWatch.remove();
         if (this._keySignal)
             global.stage.disconnect(this._keySignal);
+        if (this._monitorSignal)
+            Main.layoutManager.disconnect(this._monitorSignal);
+        if (this._workspaceSignal)
+            global.workspace_manager.disconnect(this._workspaceSignal);
         if (this._cursorSignal)
             this._cursorTracker.disconnect(this._cursorSignal);
         if (this._visibilitySignal)
             this._cursorTracker.disconnect(this._visibilitySignal);
         if (this._settingsSignal)
             this._settings.disconnect(this._settingsSignal);
+        if (this._laserIndicator)
+            this._laserIndicator.destroy();
 
         this._desiredActive = false;
         this._hideCursor(true);
+        this._destroyLaserSurface();
         if (this._actor)
             this._actor.destroy();
 
@@ -88,12 +161,41 @@ export default class AngryMouseExtension extends Extension {
         this._cursorTracker = null;
         this._pointerWatch = null;
         this._pressed = null;
+        this._laserActivation = null;
+        this._laserTrail = null;
+        this._laserSegments = null;
+        this._laserIndicator = null;
+        this._laserShortcutName = null;
+        this._lastErrors = null;
+        logEvent('disabled');
     }
 
     _onPointerMoved(x, y) {
+        const previousX = this._lastX;
+        const previousY = this._lastY;
         this._lastX = x;
         this._lastY = y;
         this._positionCursor();
+
+        const now = GLib.get_monotonic_time() / 1000;
+        const pointerState = global.get_pointer()[2];
+        this._updateLaserActivation(pointerState);
+        if (this._laserActive) {
+            const buttonDown = Boolean(pointerState & Clutter.ModifierType.BUTTON1_MASK);
+            if (buttonDown && !this._laserLeftButtonDown) {
+                this._laserLeftButtonDown = true;
+                this._laserTrail.start(previousX, previousY, now);
+                logEvent('stroke-start', {x: Math.round(previousX), y: Math.round(previousY)});
+            }
+            if (buttonDown && this._laserTrail.add(x, y, now))
+                this._startLaserTimer(now);
+            else if (!buttonDown && this._laserLeftButtonDown) {
+                this._laserLeftButtonDown = false;
+                this._laserTrail.end(x, y, now);
+                this._startLaserTimer(now);
+                logEvent('stroke-end', {x: Math.round(x), y: Math.round(y)});
+            }
+        }
 
         const shakeEnabled = this._settings.get_boolean('shake-enabled') ||
             !this._settings.get_boolean('keyboard-enabled');
@@ -103,7 +205,6 @@ export default class AngryMouseExtension extends Extension {
             return;
         }
 
-        const now = GLib.get_monotonic_time() / 1000;
         const shaking = this._shakeDetector.push(
             x,
             y,
@@ -146,20 +247,17 @@ export default class AngryMouseExtension extends Extension {
         const repeated = pressed && this._pressed.has(symbol);
         if (pressed)
             this._pressed.add(symbol);
-
         if (this._settings.get_boolean('keyboard-enabled')) {
             if (this._settings.get_enum('activation-method') === 0)
                 this._updateShortcut(repeated);
             else
                 this._updateDoubleControl(symbol, pressed, repeated);
         }
-
         if (!pressed)
             this._pressed.delete(symbol);
         if (!pressed && this._settings.get_boolean('keyboard-enabled') &&
             this._settings.get_enum('activation-method') === 0)
             this._updateShortcut(false);
-
         return Clutter.EVENT_PROPAGATE;
     }
 
@@ -259,6 +357,13 @@ export default class AngryMouseExtension extends Extension {
     }
 
     _onSettingChanged(key) {
+        if (key === 'laser-enabled' || key === 'laser-activation-mode' ||
+            key === 'laser-hotkey-modifiers' || key === 'laser-hotkey-key') {
+            logEvent('laser-setting', {key});
+            this._refreshLaserSettings();
+            this._resetLaser(`setting:${key}`);
+            return;
+        }
         if (key === 'cursor-size' || key === 'animation-duration-ms') {
             if (this._desiredActive)
                 this._showCursor();
@@ -403,11 +508,229 @@ export default class AngryMouseExtension extends Extension {
         this._savedPointerVisible = null;
     }
 
+    _setLaserActive(active) {
+        this._applyLaserActive(Boolean(active));
+    }
+
+    _resetLaser(reason = 'reset') {
+        const pressed = this._laserEnabled && this._laserShortcutIsPressed();
+        this._laserActivation.reset(pressed);
+        this._laserShortcutPressed = pressed;
+        this._setLaserActive(false);
+        this._syncLaserPoll();
+        logEvent('laser-reset', {reason});
+    }
+
+    _refreshLaserSettings() {
+        this._laserEnabled = this._settings.get_boolean('laser-enabled');
+        this._laserMode = this._settings.get_enum('laser-activation-mode');
+        this._laserShortcutName = this._settings.get_string('laser-hotkey-modifiers');
+        this._laserModifierMask = 0;
+        for (const modifier of this._laserShortcutName.split('+')) {
+            if (modifier === 'Control')
+                this._laserModifierMask |= Clutter.ModifierType.CONTROL_MASK;
+            else if (modifier === 'Alt')
+                this._laserModifierMask |= Clutter.ModifierType.MOD1_MASK;
+            else if (modifier === 'Shift')
+                this._laserModifierMask |= Clutter.ModifierType.SHIFT_MASK;
+        }
+    }
+
+    _laserShortcutIsPressed(state = global.get_pointer()[2]) {
+        return this._laserModifierMask !== 0 &&
+            (state & LASER_MODIFIER_MASK) === this._laserModifierMask;
+    }
+
+    _updateLaserActivation(state = global.get_pointer()[2], managePoll = true) {
+        if (!this._laserEnabled)
+            return;
+
+        const pressed = this._laserShortcutIsPressed(state);
+        if (pressed !== this._laserShortcutPressed) {
+            this._laserShortcutPressed = pressed;
+            logEvent('shortcut-state', {
+                pressed,
+                actualMask: state & LASER_MODIFIER_MASK,
+                required: this._laserShortcutName,
+            });
+        }
+        this._setLaserActive(this._laserActivation.update(
+            this._laserMode, pressed));
+        if (managePoll)
+            this._syncLaserPoll();
+    }
+
+    _syncLaserPoll() {
+        const shouldPoll = this._laserEnabled && (this._laserMode === 1 || this._laserActive);
+        if (!shouldPoll) {
+            this._clearSource('_laserPollId');
+            return;
+        }
+        if (this._laserPollId)
+            return;
+
+        this._laserPollId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 30, () => {
+            const ok = this._guard('activation-poll', () => {
+                this._updateLaserActivation(global.get_pointer()[2], false);
+                return true;
+            }, false);
+            if (ok && this._laserEnabled && (this._laserMode === 1 || this._laserActive))
+                return GLib.SOURCE_CONTINUE;
+            this._laserPollId = 0;
+            if (!ok)
+                this._setLaserActive(false);
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _applyLaserActive(active) {
+        if (this._laserActive === active)
+            return;
+        this._laserActive = active;
+        this._laserIndicator?.setActive(active);
+        logEvent('laser-active', {
+            active,
+            mode: this._laserMode === 0 ? 'hold' : 'toggle',
+        });
+        if (active) {
+            this._ensureLaserSurface();
+            return;
+        }
+
+        this._laserLeftButtonDown = false;
+        this._laserTrail.clear();
+        this._laserSegments.length = 0;
+        this._stopLaserTimer();
+        this._laserArea?.hide();
+    }
+
+    _ensureLaserSurface() {
+        if (this._laserArea)
+            return;
+
+        this._laserArea = new St.DrawingArea({reactive: false, visible: false});
+        Shell.util_set_hidden_from_pick(this._laserArea, true);
+        this._laserRepaintSignal = this._laserArea.connect('repaint', area =>
+            this._guard('laser-repaint', () => this._paintLaser(area)));
+        Main.uiGroup.add_child(this._laserArea);
+        Main.uiGroup.set_child_below_sibling(this._laserArea, this._actor);
+        logEvent('surface-created');
+    }
+
+    _destroyLaserSurface() {
+        this._stopLaserTimer();
+        if (!this._laserArea)
+            return;
+        if (this._laserRepaintSignal)
+            this._laserArea.disconnect(this._laserRepaintSignal);
+        this._laserArea.destroy();
+        this._laserArea = null;
+        this._laserRepaintSignal = 0;
+        logEvent('surface-destroyed');
+    }
+
+    _startLaserTimer(now = GLib.get_monotonic_time() / 1000) {
+        if (!this._laserActive || this._laserTimerId)
+            return;
+        if (!this._updateLaserFrame(now))
+            return;
+        logEvent('render-start');
+        this._laserTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () => {
+            if (this._guard('laser-frame', () => this._updateLaserFrame(), false))
+                return GLib.SOURCE_CONTINUE;
+            this._laserTimerId = 0;
+            logEvent('render-stop');
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _stopLaserTimer() {
+        if (!this._laserTimerId)
+            return;
+        GLib.Source.remove(this._laserTimerId);
+        this._laserTimerId = 0;
+    }
+
+    _updateLaserFrame(now = GLib.get_monotonic_time() / 1000) {
+        this._laserSegments = this._laserTrail.segments(now);
+        if (!this._laserSegments.length) {
+            this._laserArea?.hide();
+            return false;
+        }
+
+        let left = Infinity;
+        let top = Infinity;
+        let right = -Infinity;
+        let bottom = -Infinity;
+        for (const segment of this._laserSegments) {
+            left = Math.min(left, segment.start.x, segment.end.x);
+            top = Math.min(top, segment.start.y, segment.end.y);
+            right = Math.max(right, segment.start.x, segment.end.x);
+            bottom = Math.max(bottom, segment.start.y, segment.end.y);
+        }
+        if (![left, top, right, bottom].every(Number.isFinite)) {
+            this._laserArea?.hide();
+            this._reportError('invalid-laser-bounds',
+                new Error(`bounds=${left},${top},${right},${bottom}`));
+            return false;
+        }
+
+        const padding = 3;
+        this._laserOriginX = Math.floor(left - padding);
+        this._laserOriginY = Math.floor(top - padding);
+        this._laserArea.set_position(this._laserOriginX, this._laserOriginY);
+        this._laserArea.set_size(
+            Math.ceil(right + padding) - this._laserOriginX,
+            Math.ceil(bottom + padding) - this._laserOriginY);
+        this._laserArea.show();
+        this._laserArea.queue_repaint();
+        return true;
+    }
+
+    _paintLaser(area) {
+        const cr = area.get_context();
+        try {
+            cr.translate(-this._laserOriginX, -this._laserOriginY);
+            cr.setSourceRGBA(1, 45 / 255, 45 / 255, 1);
+            cr.setLineCap(Cairo.LineCap.ROUND);
+            cr.setLineJoin(Cairo.LineJoin.ROUND);
+            for (const segment of this._laserSegments) {
+                cr.setLineWidth(segment.width);
+                cr.moveTo(segment.start.x, segment.start.y);
+                cr.lineTo(segment.end.x, segment.end.y);
+                cr.stroke();
+            }
+        } finally {
+            cr.$dispose();
+        }
+    }
+
     _clearSource(property) {
         if (this[property]) {
             GLib.Source.remove(this[property]);
             this[property] = 0;
         }
+    }
+
+    _guard(event, callback, fallback = undefined) {
+        try {
+            return callback();
+        } catch (error) {
+            this._reportError(event, error);
+            return fallback;
+        }
+    }
+
+    _reportError(event, error) {
+        const message = error?.message || String(error);
+        const now = GLib.get_monotonic_time() / 1000;
+        const signature = `${event}:${message}`;
+        const previous = this._lastErrors?.get(signature);
+        if (previous !== undefined && now - previous < 5000)
+            return;
+        this._lastErrors?.set(signature, now);
+        console.error(`${LOG_PREFIX} event=${event} error=${JSON.stringify(message)} ` +
+            `stack=${JSON.stringify(error?.stack || '')}`);
     }
 
     _hasAny(...symbols) {

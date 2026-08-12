@@ -49,13 +49,39 @@ export default class AngryMousePreferences extends ExtensionPreferences {
         ], 'activation-method');
         const requireSuper = this._switchRow('Require Super', 'require-super');
         requireSuper.subtitle = 'Applies to double Control methods';
-        const shortcutRow = this._shortcutRow(window);
+        const shortcutRow = this._shortcutRow(window, {
+            modifiersKey: 'hotkey-modifiers',
+            keyKey: 'hotkey-key',
+            resetModifiers: 'Control',
+            resetKey: 'None',
+            allowEscape: true,
+        });
         keyboardGroup.add(keyboardSwitch);
         keyboardGroup.add(modeRow);
         keyboardGroup.add(methodRow);
         keyboardGroup.add(requireSuper);
         keyboardGroup.add(shortcutRow);
         triggerPage.add(keyboardGroup);
+
+        const laserGroup = new Adw.PreferencesGroup({
+            title: 'Laser pointer',
+            description: 'Left-drag to draw a fading red trail. Input still reaches the application below.',
+        });
+        const laserSwitch = this._switchRow('Enable laser pointer', 'laser-enabled');
+        const laserMode = this._comboRow('Mode', ['Hold', 'Toggle'], 'laser-activation-mode');
+        const laserShortcut = this._shortcutRow(window, {
+            modifiersKey: 'laser-hotkey-modifiers',
+            keyKey: 'laser-hotkey-key',
+            resetModifiers: 'Control+Alt',
+            resetKey: 'None',
+            modifierOnly: true,
+            allowEscape: false,
+            subtitle: 'Modifier keys only; defaults to Ctrl+Alt',
+        });
+        laserGroup.add(laserSwitch);
+        laserGroup.add(laserMode);
+        laserGroup.add(laserShortcut);
+        triggerPage.add(laserGroup);
         window.add(triggerPage);
 
         const sync = () => {
@@ -69,18 +95,21 @@ export default class AngryMousePreferences extends ExtensionPreferences {
             shakeWindow.sensitive = shakeSwitch.active;
             shakeSpeed.sensitive = shakeSwitch.active;
             shakeTurns.sensitive = shakeSwitch.active;
+            laserMode.sensitive = laserSwitch.active;
+            laserShortcut.sensitive = laserSwitch.active;
         };
         shakeSwitch.connect('notify::active', sync);
         keyboardSwitch.connect('notify::active', sync);
         methodRow.connect('notify::selected', sync);
+        laserSwitch.connect('notify::active', sync);
         sync();
 
         window.connect('close-request', () => {
+            this._stopShortcutRecording?.();
             for (const id of this._settingsSignalIds)
                 this._settings.disconnect(id);
             this._settingsSignalIds = null;
-            this._shortcutLabel = null;
-            this._recordingModifiers = null;
+            this._stopShortcutRecording = null;
             this._settings = null;
             return false;
         });
@@ -116,81 +145,98 @@ export default class AngryMousePreferences extends ExtensionPreferences {
         return row;
     }
 
-    _shortcutRow(window) {
+    _shortcutRow(window, options) {
         const row = new Adw.ActionRow({
             title: 'Shortcut',
-            subtitle: 'A modifier-only shortcut is supported',
+            subtitle: options.subtitle || 'A modifier-only shortcut is supported',
         });
-        this._shortcutLabel = new Gtk.ShortcutLabel({valign: Gtk.Align.CENTER});
+        const shortcutLabel = new Gtk.ShortcutLabel({valign: Gtk.Align.CENTER});
         const recordButton = new Gtk.Button({label: 'Record', valign: Gtk.Align.CENTER});
         const resetButton = new Gtk.Button({label: 'Reset', valign: Gtk.Align.CENTER});
-        row.add_suffix(this._shortcutLabel);
+        const recordingModifiers = new Set();
+        let recording = false;
+        row.add_suffix(shortcutLabel);
         row.add_suffix(recordButton);
         row.add_suffix(resetButton);
         row.activatable_widget = recordButton;
 
         const syncLabel = () => {
-            const modifiers = this._settings.get_string('hotkey-modifiers');
-            const key = this._settings.get_string('hotkey-key');
-            this._shortcutLabel.accelerator = this._accelerator(modifiers, key);
+            const modifiers = this._settings.get_string(options.modifiersKey);
+            const key = this._settings.get_string(options.keyKey);
+            shortcutLabel.accelerator = this._accelerator(modifiers, key);
         };
         this._settingsSignalIds.push(
-            this._settings.connect('changed::hotkey-modifiers', syncLabel),
-            this._settings.connect('changed::hotkey-key', syncLabel));
+            this._settings.connect(`changed::${options.modifiersKey}`, syncLabel),
+            this._settings.connect(`changed::${options.keyKey}`, syncLabel));
         syncLabel();
 
         const controller = new Gtk.EventControllerKey();
         window.add_controller(controller);
+        const stopRecording = () => {
+            recording = false;
+            recordingModifiers.clear();
+            recordButton.label = 'Record';
+            if (this._stopShortcutRecording === stopRecording)
+                this._stopShortcutRecording = null;
+        };
         recordButton.connect('clicked', () => {
-            this._recording = !this._recording;
-            this._recordingModifiers = new Set();
-            recordButton.label = this._recording ? 'Press keys…' : 'Record';
+            const start = !recording;
+            this._stopShortcutRecording?.();
+            if (start) {
+                recording = true;
+                recordButton.label = 'Press keys…';
+                this._stopShortcutRecording = stopRecording;
+            }
         });
         resetButton.connect('clicked', () => {
-            this._recording = false;
-            recordButton.label = 'Record';
-            this._settings.set_string('hotkey-modifiers', 'Control');
-            this._settings.set_string('hotkey-key', 'None');
+            this._stopShortcutRecording?.();
+            this._saveShortcut(
+                new Set(options.resetModifiers.split('+').filter(item => item !== 'None')),
+                options.resetKey,
+                options);
         });
         controller.connect('key-pressed', (_controller, keyval, _keycode, state) => {
-            if (!this._recording)
+            if (!recording)
                 return false;
             const modifier = this._modifierName(keyval);
             if (modifier) {
-                this._recordingModifiers.add(modifier);
+                recordingModifiers.add(modifier);
                 return true;
             }
             const key = this._keyName(keyval);
             const modifiers = this._modifiersFromState(state);
-            for (const item of this._recordingModifiers)
+            for (const item of recordingModifiers)
                 modifiers.add(item);
-            if (!key || state & Gdk.ModifierType.SUPER_MASK) {
+            if (options.modifierOnly || !key || !options.allowEscape && key === 'Escape' ||
+                state & Gdk.ModifierType.SUPER_MASK) {
                 recordButton.label = 'Unsupported';
                 return true;
             }
-            this._saveShortcut(modifiers, key, recordButton);
+            this._saveShortcut(modifiers, key, options);
+            stopRecording();
             return true;
         });
         controller.connect('key-released', (_controller, keyval) => {
-            if (!this._recording || !this._modifierName(keyval))
+            if (!recording || !this._modifierName(keyval))
                 return;
-            this._saveShortcut(this._recordingModifiers, 'None', recordButton);
+            this._saveShortcut(recordingModifiers, 'None', options);
+            stopRecording();
         });
         return row;
     }
 
-    _saveShortcut(modifiers, key, button) {
+    _saveShortcut(modifiers, key, options) {
         const ordered = ['Control', 'Alt', 'Shift'].filter(item => modifiers.has(item));
-        this._settings.set_string('hotkey-modifiers', ordered.length ? ordered.join('+') : 'None');
-        this._settings.set_string('hotkey-key', key);
-        this._recording = false;
-        button.label = 'Record';
+        this._settings.set_string(
+            options.modifiersKey, ordered.length ? ordered.join('+') : 'None');
+        this._settings.set_string(options.keyKey, key);
     }
 
     _accelerator(modifiers, key) {
         const prefix = modifiers === 'None' ? '' : modifiers.split('+')
             .map(item => `<${item}>`).join('');
-        const suffix = key === 'None' ? '' : key.startsWith('D') ? key.slice(1) : key;
+        const suffix = key === 'None' ? '' : key.startsWith('D') ? key.slice(1) :
+            key.length === 1 ? key.toLowerCase() : key;
         return prefix + suffix;
     }
 

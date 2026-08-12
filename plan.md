@@ -12,6 +12,16 @@ telemetry, and network path. Publish the result under MIT.
 The port uses the active GNOME cursor rather than shipping cursor collections.
 It targets both X11 and Wayland and never changes GNOME's locate-pointer setting.
 
+## Laser pointer feature
+
+- Defaults to Hold mode with Ctrl+Alt; Toggle mode and other modifier combinations are configurable.
+- Draws a fixed red four-pixel trail only during left-drag while active and propagates every input event.
+- Preserves the source behavior: 0.6 smoothing, 50-sample taper, quartic one-second expiry,
+  and independent strokes.
+- Uses one lazily created `St.DrawingArea` and one render timer that stops after the final fade.
+- Clears on deactivation, workspace change, monitor change, lock-triggered disable, and extension disable.
+- Adds no dependency, asset, process, network path, licensing path, or configurable appearance.
+
 ## Phase 1 — Platform mapping
 
 - Replace Windows mouse hooks with GNOME Shell's idle-aware pointer watcher.

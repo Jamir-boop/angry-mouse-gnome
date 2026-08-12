@@ -1,8 +1,9 @@
 {
   "name": "Angry Mouse",
-  "description": "Reveal the active pointer with a large animated cursor after a mouse shake or keyboard shortcut.",
+  "description": "Reveal the active pointer with a large animated cursor, or draw a fading laser trail while dragging.",
   "uuid": "angry-mouse@rattlepop.click",
   "settings-schema": "org.gnome.shell.extensions.angry-mouse",
   "shell-version": ["48"],
+  "version": 4,
   "url": "https://github.com/Jamir-boop/angry-mouse-gnome"
 }

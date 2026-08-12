@@ -69,6 +69,31 @@
       <summary>Shortcut key</summary>
       <description>Optional A-Z, 0-9, F1-F12, Space, or Escape shortcut key.</description>
     </key>
+    <key name="laser-active" type="b">
+      <default>false</default>
+      <summary>Legacy laser pointer state</summary>
+      <description>Retained for compatibility with an already-loaded older extension module.</description>
+    </key>
+    <key name="laser-enabled" type="b">
+      <default>true</default>
+      <summary>Enable laser pointer</summary>
+      <description>Allow the configured shortcut to activate the laser pointer.</description>
+    </key>
+    <key name="laser-activation-mode" enum="org.gnome.shell.extensions.angry-mouse.ActivationMode">
+      <default>'hold'</default>
+      <summary>Laser activation mode</summary>
+      <description>Hold activates while the shortcut is pressed; toggle changes state per press.</description>
+    </key>
+    <key name="laser-hotkey-modifiers" type="s">
+      <default>'Control+Alt'</default>
+      <summary>Laser shortcut modifiers</summary>
+      <description>Canonical modifier names joined by plus signs.</description>
+    </key>
+    <key name="laser-hotkey-key" type="s">
+      <default>'None'</default>
+      <summary>Laser shortcut key</summary>
+      <description>Optional A-Z, 0-9, F1-F12, or Space shortcut key.</description>
+    </key>
     <key name="shake-window-ms" type="i">
       <range min="100" max="2000"/>
       <default>200</default>
