@@ -4,6 +4,6 @@
   "uuid": "angry-mouse@rattlepop.click",
   "settings-schema": "org.gnome.shell.extensions.angry-mouse",
   "shell-version": ["48"],
-  "version": 4,
+  "version": 6,
   "url": "https://github.com/Jamir-boop/angry-mouse-gnome"
 }

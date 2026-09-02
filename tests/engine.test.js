@@ -90,4 +90,26 @@ assert(!laserActivation.update(1, true), 'reset does not retrigger a held shortc
 laserActivation.update(1, false);
 assert(laserActivation.update(1, true), 'reset accepts a new press after release');
 
+laserActivation.reset();
+assert(!laserActivation.update(0, true, true), 'defers hold mode during an existing drag');
+assert(laserActivation.pending, 'reports a pending hold activation');
+assert(laserActivation.update(0, true, false), 'activates hold mode after the drag ends');
+assert(!laserActivation.pending, 'clears the pending state after activation');
+
+laserActivation.reset();
+assert(!laserActivation.update(0, true, true), 'starts another pending hold activation');
+assert(!laserActivation.update(0, false, true), 'cancels pending hold mode on shortcut release');
+assert(!laserActivation.pending, 'clears a canceled pending activation');
+
+laserActivation.reset();
+assert(!laserActivation.update(1, true, true), 'defers toggle mode during an existing drag');
+assert(!laserActivation.update(1, false, true), 'keeps toggle mode pending after shortcut release');
+assert(laserActivation.pending, 'reports a pending toggle activation');
+assert(laserActivation.update(1, false, false), 'activates toggle mode after the drag ends');
+
+laserActivation.reset();
+assert(laserActivation.update(0, true), 'activates before a new laser stroke');
+assert(laserActivation.update(0, false, true), 'keeps blocking until the stroke button is released');
+assert(!laserActivation.update(0, false, false), 'deactivates after the stroke button is released');
+
 print('engine tests passed');

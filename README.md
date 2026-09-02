@@ -10,7 +10,7 @@
 
 **Angry Mouse** makes the active pointer large and animated after a mouse shake
 or keyboard activation. Its fading laser trail highlights anything on screen
-while the click-drag still reaches the application below.
+without clicking or dragging the application below.
 
 It uses the current system cursor, so theme changes and application-specific
 cursor shapes keep working.
@@ -20,7 +20,8 @@ cursor shapes keep working.
 - **Find it fast:** shake the mouse, press a shortcut, or double-press Control
 - **Present clearly:** hold `Ctrl+Alt` and left-drag to draw a fading laser trail
 - **Make it yours:** configure shortcuts and choose hold or toggle activation
-- **Keep native behavior:** input passes through and the current cursor theme remains intact
+- **Present safely:** pointer input is blocked while the laser is active
+- **Keep native behavior:** the current cursor theme remains intact
 - Optional hiding of the normal system cursor while active
 - Native GNOME preferences
 - Wayland and X11 support through GNOME Shell APIs

@@ -208,14 +208,25 @@ export class LaserActivation {
     reset(shortcutPressed = false) {
         this._shortcutPressed = shortcutPressed;
         this._active = false;
+        this._effectiveActive = false;
+        this.pending = false;
     }
 
-    update(mode, shortcutPressed) {
+    update(mode, shortcutPressed, pointerPressed = false) {
         if (mode === 0)
             this._active = shortcutPressed;
         else if (shortcutPressed && !this._shortcutPressed)
             this._active = !this._active;
         this._shortcutPressed = shortcutPressed;
-        return this._active;
+
+        if (!this._active) {
+            this.pending = false;
+            if (!pointerPressed)
+                this._effectiveActive = false;
+        } else if (!this._effectiveActive) {
+            this.pending = pointerPressed;
+            this._effectiveActive = !pointerPressed;
+        }
+        return this._effectiveActive;
     }
 }

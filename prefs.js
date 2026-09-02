@@ -65,7 +65,7 @@ export default class AngryMousePreferences extends ExtensionPreferences {
 
         const laserGroup = new Adw.PreferencesGroup({
             title: 'Laser pointer',
-            description: 'Left-drag to draw a fading red trail. Input still reaches the application below.',
+            description: 'Left-drag to draw a fading red trail without interacting with the application below.',
         });
         const laserSwitch = this._switchRow('Enable laser pointer', 'laser-enabled');
         const laserMode = this._comboRow('Mode', ['Hold', 'Toggle'], 'laser-activation-mode');

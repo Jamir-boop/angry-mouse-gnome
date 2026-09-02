@@ -21,6 +21,17 @@ const TRIGGER_KEYS = new Set([
 const LOG_PREFIX = '[Angry Mouse]';
 const LASER_MODIFIER_MASK = Clutter.ModifierType.CONTROL_MASK |
     Clutter.ModifierType.MOD1_MASK | Clutter.ModifierType.SHIFT_MASK;
+const LASER_BUTTON_MASK = Clutter.ModifierType.BUTTON1_MASK |
+    Clutter.ModifierType.BUTTON2_MASK | Clutter.ModifierType.BUTTON3_MASK |
+    Clutter.ModifierType.BUTTON4_MASK | Clutter.ModifierType.BUTTON5_MASK;
+const LASER_POINTER_EVENTS = new Set([
+    Clutter.EventType.BUTTON_PRESS,
+    Clutter.EventType.BUTTON_RELEASE,
+    Clutter.EventType.ENTER,
+    Clutter.EventType.LEAVE,
+    Clutter.EventType.MOTION,
+    Clutter.EventType.SCROLL,
+]);
 
 function logEvent(event, fields = {}) {
     const details = Object.entries(fields)
@@ -69,6 +80,7 @@ export default class AngryMouseExtension extends Extension {
         this._laserTimerId = 0;
         this._laserPollId = 0;
         this._laserActive = false;
+        this._laserActivationPending = false;
         this._laserShortcutPressed = false;
         this._laserEnabled = false;
         this._laserMode = 0;
@@ -76,6 +88,7 @@ export default class AngryMouseExtension extends Extension {
         this._laserShortcutName = 'None';
         this._laserLeftButtonDown = false;
         this._laserSegments = [];
+        this._laserBlocker = null;
         this._laserArea = null;
         this._laserRepaintSignal = 0;
         this._laserOriginX = 0;
@@ -164,6 +177,7 @@ export default class AngryMouseExtension extends Extension {
         this._laserActivation = null;
         this._laserTrail = null;
         this._laserSegments = null;
+        this._laserBlocker = null;
         this._laserIndicator = null;
         this._laserShortcutName = null;
         this._lastErrors = null;
@@ -239,6 +253,8 @@ export default class AngryMouseExtension extends Extension {
 
     _onCapturedEvent(event) {
         const type = event.type();
+        if (this._captureLaserPointerEvent(event, type))
+            return Clutter.EVENT_STOP;
         if (type !== Clutter.EventType.KEY_PRESS && type !== Clutter.EventType.KEY_RELEASE)
             return Clutter.EVENT_PROPAGATE;
 
@@ -258,7 +274,44 @@ export default class AngryMouseExtension extends Extension {
         if (!pressed && this._settings.get_boolean('keyboard-enabled') &&
             this._settings.get_enum('activation-method') === 0)
             this._updateShortcut(false);
+        const pointerState = global.get_pointer()[2];
+        this._updateLaserActivation(this._pressedLaserModifiers() |
+            (pointerState & LASER_BUTTON_MASK));
         return Clutter.EVENT_PROPAGATE;
+    }
+
+    _captureLaserPointerEvent(event, type) {
+        if (!this._laserActive || !LASER_POINTER_EVENTS.has(type))
+            return false;
+
+        if ((type === Clutter.EventType.BUTTON_PRESS ||
+            type === Clutter.EventType.BUTTON_RELEASE) && event.get_button() === 1) {
+            const [x, y] = global.get_pointer();
+            const now = GLib.get_monotonic_time() / 1000;
+            if (type === Clutter.EventType.BUTTON_PRESS && !this._laserLeftButtonDown) {
+                this._laserLeftButtonDown = true;
+                this._laserTrail.start(x, y, now);
+                logEvent('stroke-start', {x: Math.round(x), y: Math.round(y)});
+            } else if (type === Clutter.EventType.BUTTON_RELEASE &&
+                this._laserLeftButtonDown) {
+                this._laserLeftButtonDown = false;
+                this._laserTrail.end(x, y, now);
+                this._startLaserTimer(now);
+                logEvent('stroke-end', {x: Math.round(x), y: Math.round(y)});
+            }
+        }
+        return true;
+    }
+
+    _pressedLaserModifiers() {
+        let state = 0;
+        if (this._hasAny(Clutter.KEY_Control_L, Clutter.KEY_Control_R))
+            state |= Clutter.ModifierType.CONTROL_MASK;
+        if (this._hasAny(Clutter.KEY_Alt_L, Clutter.KEY_Alt_R, Clutter.KEY_ISO_Level3_Shift))
+            state |= Clutter.ModifierType.MOD1_MASK;
+        if (this._hasAny(Clutter.KEY_Shift_L, Clutter.KEY_Shift_R))
+            state |= Clutter.ModifierType.SHIFT_MASK;
+        return state;
     }
 
     _updateShortcut(repeated) {
@@ -515,6 +568,7 @@ export default class AngryMouseExtension extends Extension {
     _resetLaser(reason = 'reset') {
         const pressed = this._laserEnabled && this._laserShortcutIsPressed();
         this._laserActivation.reset(pressed);
+        this._laserActivationPending = false;
         this._laserShortcutPressed = pressed;
         this._setLaserActive(false);
         this._syncLaserPoll();
@@ -554,14 +608,20 @@ export default class AngryMouseExtension extends Extension {
                 required: this._laserShortcutName,
             });
         }
-        this._setLaserActive(this._laserActivation.update(
-            this._laserMode, pressed));
+        const active = this._laserActivation.update(
+            this._laserMode, pressed, Boolean(state & LASER_BUTTON_MASK));
+        if (this._laserActivationPending !== this._laserActivation.pending) {
+            this._laserActivationPending = this._laserActivation.pending;
+            logEvent('laser-activation-pending', {pending: this._laserActivationPending});
+        }
+        this._setLaserActive(active);
         if (managePoll)
             this._syncLaserPoll();
     }
 
     _syncLaserPoll() {
-        const shouldPoll = this._laserEnabled && (this._laserMode === 1 || this._laserActive);
+        const shouldPoll = this._laserEnabled &&
+            (this._laserMode === 1 || this._laserActive || this._laserActivationPending);
         if (!shouldPoll) {
             this._clearSource('_laserPollId');
             return;
@@ -574,7 +634,8 @@ export default class AngryMouseExtension extends Extension {
                 this._updateLaserActivation(global.get_pointer()[2], false);
                 return true;
             }, false);
-            if (ok && this._laserEnabled && (this._laserMode === 1 || this._laserActive))
+            if (ok && this._laserEnabled &&
+                (this._laserMode === 1 || this._laserActive || this._laserActivationPending))
                 return GLib.SOURCE_CONTINUE;
             this._laserPollId = 0;
             if (!ok)
@@ -586,16 +647,21 @@ export default class AngryMouseExtension extends Extension {
     _applyLaserActive(active) {
         if (this._laserActive === active)
             return;
+        if (active) {
+            this._ensureLaserSurface();
+            Main.uiGroup.set_child_above_sibling(this._laserBlocker, null);
+            this._laserBlocker.show();
+        } else {
+            this._laserBlocker?.hide();
+        }
         this._laserActive = active;
         this._laserIndicator?.setActive(active);
         logEvent('laser-active', {
             active,
             mode: this._laserMode === 0 ? 'hold' : 'toggle',
         });
-        if (active) {
-            this._ensureLaserSurface();
+        if (active)
             return;
-        }
 
         this._laserLeftButtonDown = false;
         this._laserTrail.clear();
@@ -605,6 +671,19 @@ export default class AngryMouseExtension extends Extension {
     }
 
     _ensureLaserSurface() {
+        if (!this._laserBlocker) {
+            this._laserBlocker = new Clutter.Actor({
+                opacity: 0,
+                reactive: true,
+                visible: false,
+                constraints: new Clutter.BindConstraint({
+                    source: Main.uiGroup,
+                    coordinate: Clutter.BindCoordinate.ALL,
+                }),
+            });
+            Main.layoutManager.addTopChrome(this._laserBlocker);
+            logEvent('input-blocker-created');
+        }
         if (this._laserArea)
             return;
 
@@ -619,14 +698,19 @@ export default class AngryMouseExtension extends Extension {
 
     _destroyLaserSurface() {
         this._stopLaserTimer();
-        if (!this._laserArea)
-            return;
-        if (this._laserRepaintSignal)
-            this._laserArea.disconnect(this._laserRepaintSignal);
-        this._laserArea.destroy();
-        this._laserArea = null;
-        this._laserRepaintSignal = 0;
-        logEvent('surface-destroyed');
+        if (this._laserArea) {
+            if (this._laserRepaintSignal)
+                this._laserArea.disconnect(this._laserRepaintSignal);
+            this._laserArea.destroy();
+            this._laserArea = null;
+            this._laserRepaintSignal = 0;
+            logEvent('surface-destroyed');
+        }
+        if (this._laserBlocker) {
+            this._laserBlocker.destroy();
+            this._laserBlocker = null;
+            logEvent('input-blocker-destroyed');
+        }
     }
 
     _startLaserTimer(now = GLib.get_monotonic_time() / 1000) {
