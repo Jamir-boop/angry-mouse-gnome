@@ -40,7 +40,8 @@ export default class AngryMousePreferences extends ExtensionPreferences {
 
         const keyboardGroup = new Adw.PreferencesGroup({title: 'Keyboard'});
         const keyboardSwitch = this._switchRow('Enable keyboard activation', 'keyboard-enabled');
-        const modeRow = this._comboRow('Mode', ['Hold', 'Toggle'], 'activation-mode');
+        const modeRow = this._comboRow('Cursor activation mode', ['Hold', 'Toggle'], 'activation-mode');
+        modeRow.subtitle = 'Applies to mouse shake and keyboard activation';
         const methodRow = this._comboRow('Method', [
             'Shortcut',
             'Double Left Control',
@@ -88,7 +89,7 @@ export default class AngryMousePreferences extends ExtensionPreferences {
             if (!shakeSwitch.active && !keyboardSwitch.active)
                 shakeSwitch.active = true;
             const keyboardEnabled = keyboardSwitch.active;
-            modeRow.sensitive = keyboardEnabled;
+            modeRow.sensitive = keyboardEnabled || shakeSwitch.active;
             methodRow.sensitive = keyboardEnabled;
             shortcutRow.visible = keyboardEnabled && methodRow.selected === 0;
             requireSuper.visible = keyboardEnabled && methodRow.selected !== 0;
@@ -170,7 +171,7 @@ export default class AngryMousePreferences extends ExtensionPreferences {
             this._settings.connect(`changed::${options.keyKey}`, syncLabel));
         syncLabel();
 
-        const controller = new Gtk.EventControllerKey();
+        const controller = new Gtk.EventControllerKey({propagation_phase: Gtk.PropagationPhase.CAPTURE});
         window.add_controller(controller);
         const stopRecording = () => {
             recording = false;
@@ -217,7 +218,7 @@ export default class AngryMousePreferences extends ExtensionPreferences {
             return true;
         });
         controller.connect('key-released', (_controller, keyval) => {
-            if (!recording || !this._modifierName(keyval))
+            if (!recording || !recordingModifiers.size || !this._modifierName(keyval))
                 return;
             this._saveShortcut(recordingModifiers, 'None', options);
             stopRecording();
@@ -227,6 +228,8 @@ export default class AngryMousePreferences extends ExtensionPreferences {
 
     _saveShortcut(modifiers, key, options) {
         const ordered = ['Control', 'Alt', 'Shift'].filter(item => modifiers.has(item));
+        if (!ordered.length && key === 'None')
+            return;
         this._settings.set_string(
             options.modifiersKey, ordered.length ? ordered.join('+') : 'None');
         this._settings.set_string(options.keyKey, key);
@@ -235,7 +238,7 @@ export default class AngryMousePreferences extends ExtensionPreferences {
     _accelerator(modifiers, key) {
         const prefix = modifiers === 'None' ? '' : modifiers.split('+')
             .map(item => `<${item}>`).join('');
-        const suffix = key === 'None' ? '' : key.startsWith('D') ? key.slice(1) :
+        const suffix = key === 'None' ? '' : /^D[0-9]$/.test(key) ? key.slice(1) :
             key.length === 1 ? key.toLowerCase() : key;
         return prefix + suffix;
     }

@@ -3,6 +3,7 @@ import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
+import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
 
@@ -12,6 +13,7 @@ import * as PointerWatcher from 'resource:///org/gnome/shell/ui/pointerWatcher.j
 import * as QuickSettings from 'resource:///org/gnome/shell/ui/quickSettings.js';
 
 import {DoubleControlTracker, LaserActivation, LaserTrail, ShakeDetector} from './engine.js';
+import {KeyboardObserver} from './keyboard.js';
 
 const TRIGGER_KEYS = new Set([
     'shake-enabled', 'keyboard-enabled', 'activation-mode', 'activation-method',
@@ -64,7 +66,9 @@ export default class AngryMouseExtension extends Extension {
         this._doubleControl = new DoubleControlTracker();
         this._laserActivation = new LaserActivation();
         this._laserTrail = new LaserTrail();
-        this._pressed = new Set();
+        this._pressed = new Map();
+        this._keyboardObserver = null;
+        this._shakeSuppressed = false;
         this._shakeGestureActive = false;
         this._shakeHeld = false;
         this._keyboardHeld = false;
@@ -125,6 +129,7 @@ export default class AngryMouseExtension extends Extension {
         this._lastX = x;
         this._lastY = y;
         this._positionCursor();
+        this._syncKeyboardObserver();
         logEvent('enabled', {
             laserEnabled: this._laserEnabled,
             laserMode: this._laserMode === 0 ? 'hold' : 'toggle',
@@ -134,6 +139,8 @@ export default class AngryMouseExtension extends Extension {
 
     disable() {
         logEvent('disable-start');
+        this._keyboardObserver?.stop();
+        this._keyboardObserver = null;
         this._setLaserActive(false);
         this._clearSource('_laserPollId');
         if (this._shakeTimeoutId) {
@@ -189,7 +196,8 @@ export default class AngryMouseExtension extends Extension {
         const previousY = this._lastY;
         this._lastX = x;
         this._lastY = y;
-        this._positionCursor();
+        if (this._actor.visible)
+            this._positionCursor();
 
         const now = GLib.get_monotonic_time() / 1000;
         const pointerState = global.get_pointer()[2];
@@ -210,6 +218,9 @@ export default class AngryMouseExtension extends Extension {
                 logEvent('stroke-end', {x: Math.round(x), y: Math.round(y)});
             }
         }
+
+        if (this._shakeSuppressed)
+            return;
 
         const shakeEnabled = this._settings.get_boolean('shake-enabled') ||
             !this._settings.get_boolean('keyboard-enabled');
@@ -257,27 +268,62 @@ export default class AngryMouseExtension extends Extension {
             return Clutter.EVENT_STOP;
         if (type !== Clutter.EventType.KEY_PRESS && type !== Clutter.EventType.KEY_RELEASE)
             return Clutter.EVENT_PROPAGATE;
+        if (this._keyboardObserver)
+            return Clutter.EVENT_PROPAGATE;
 
-        const symbol = event.get_key_symbol();
-        const pressed = type === Clutter.EventType.KEY_PRESS;
-        const repeated = pressed && this._pressed.has(symbol);
+        this._onKeyEvent(event.get_key_code(), event.get_key_symbol(),
+            type === Clutter.EventType.KEY_PRESS, GLib.get_monotonic_time() / 1000);
+        return Clutter.EVENT_PROPAGATE;
+    }
+
+    _onKeyEvent(keycode, symbol, pressed, time) {
+        const repeated = pressed && this._pressed.has(keycode);
+        symbol = this._pressed.get(keycode) ?? symbol;
         if (pressed)
-            this._pressed.add(symbol);
+            this._pressed.set(keycode, symbol);
+        else
+            this._pressed.delete(keycode);
         if (this._settings.get_boolean('keyboard-enabled')) {
             if (this._settings.get_enum('activation-method') === 0)
                 this._updateShortcut(repeated);
             else
-                this._updateDoubleControl(symbol, pressed, repeated);
+                this._updateDoubleControl(symbol, pressed, repeated, time);
         }
-        if (!pressed)
-            this._pressed.delete(symbol);
-        if (!pressed && this._settings.get_boolean('keyboard-enabled') &&
-            this._settings.get_enum('activation-method') === 0)
-            this._updateShortcut(false);
         const pointerState = global.get_pointer()[2];
         this._updateLaserActivation(this._pressedLaserModifiers() |
             (pointerState & LASER_BUTTON_MASK));
-        return Clutter.EVENT_PROPAGATE;
+    }
+
+    _syncKeyboardObserver() {
+        if (Meta.is_wayland_compositor())
+            return;
+        if (!this._settings.get_boolean('keyboard-enabled') && !this._laserEnabled) {
+            this._keyboardObserver?.stop();
+            this._keyboardObserver = null;
+            this._resetKeyboardState();
+            return;
+        }
+        if (this._keyboardObserver)
+            return;
+        this._keyboardObserver = new KeyboardObserver(`${this.path}/keyboard.js`,
+            (keycode, symbol, pressed, time) => this._guard('keyboard-event',
+                () => this._onKeyEvent(keycode, symbol, pressed, time)),
+            reason => this._guard('keyboard-observer-stopped', () => {
+                this._keyboardObserver = null;
+                this._toggleActive = false;
+                this._resetKeyboardState();
+                this._resetLaser('keyboard-observer-stopped');
+                logEvent('keyboard-observer-stopped', {reason});
+            }));
+        this._keyboardObserver.start();
+    }
+
+    _resetKeyboardState() {
+        this._pressed.clear();
+        this._doubleControl.reset();
+        this._clearSource('_doubleHoldTimeoutId');
+        this._keyboardHeld = false;
+        this._updateActive();
     }
 
     _captureLaserPointerEvent(event, type) {
@@ -341,20 +387,22 @@ export default class AngryMouseExtension extends Extension {
 
         const required = this._settings.get_string('hotkey-modifiers').split('+')
             .filter(part => part !== 'None').sort();
+        const requiredKey = this._settings.get_string('hotkey-key');
+        if (required.length === 0 && requiredKey === 'None')
+            return false;
         if (actualModifiers.sort().join('+') !== required.join('+'))
             return false;
 
         const keys = [];
-        for (const symbol of this._pressed) {
+        for (const symbol of this._pressed.values()) {
             if (!this._isModifier(symbol))
                 keys.push(this._keyName(symbol) || `Unsupported-${symbol}`);
         }
-        const requiredKey = this._settings.get_string('hotkey-key');
         return requiredKey === 'None' ? keys.length === 0 :
             keys.length === 1 && keys[0] === requiredKey;
     }
 
-    _updateDoubleControl(symbol, pressed, repeated) {
+    _updateDoubleControl(symbol, pressed, repeated, time) {
         const side = this._controlSide(symbol);
         const requireSuper = this._settings.get_boolean('require-super');
         const superHeld = !requireSuper || this._hasAny(Clutter.KEY_Super_L, Clutter.KEY_Super_R);
@@ -363,12 +411,11 @@ export default class AngryMouseExtension extends Extension {
             method === 2 && side === 'right');
 
         if (accepted && !repeated) {
-            const now = GLib.get_monotonic_time() / 1000;
             const maximum = this._mouseSettings.get_int('double-click');
             const minimum = Math.min(100, maximum / 5);
             const action = pressed
-                ? this._doubleControl.press(side, now, superHeld, minimum, maximum)
-                : this._doubleControl.release(side, now, superHeld);
+                ? this._doubleControl.press(side, time, superHeld, minimum, maximum)
+                : this._doubleControl.release(side, time, superHeld);
             if (action === 'second-press')
                 this._startDoubleHoldGrace();
             else if (action === 'second-release') {
@@ -388,7 +435,7 @@ export default class AngryMouseExtension extends Extension {
             this._clearSource('_doubleHoldTimeoutId');
             this._keyboardHeld = false;
             this._updateActive();
-        } else if (!pressed && allowedSuper) {
+        } else if (!pressed && allowedSuper && !superHeld) {
             this._doubleControl.cancel();
             this._clearSource('_doubleHoldTimeoutId');
             this._keyboardHeld = false;
@@ -415,6 +462,8 @@ export default class AngryMouseExtension extends Extension {
             logEvent('laser-setting', {key});
             this._refreshLaserSettings();
             this._resetLaser(`setting:${key}`);
+            if (key === 'laser-enabled')
+                this._syncKeyboardObserver();
             return;
         }
         if (key === 'cursor-size' || key === 'animation-duration-ms') {
@@ -432,6 +481,8 @@ export default class AngryMouseExtension extends Extension {
         if (TRIGGER_KEYS.has(key)) {
             this._resetTriggers();
             this._updateActive();
+            if (key === 'keyboard-enabled')
+                this._syncKeyboardObserver();
         }
     }
 
@@ -447,9 +498,12 @@ export default class AngryMouseExtension extends Extension {
     }
 
     _updateActive() {
-        this._desiredActive = this._settings.get_enum('activation-mode') === 1
+        const active = this._settings.get_enum('activation-mode') === 1
             ? this._toggleActive
             : this._shakeHeld || this._keyboardHeld;
+        if (active === this._desiredActive)
+            return;
+        this._desiredActive = active;
         if (this._desiredActive)
             this._showCursor();
         else
@@ -460,27 +514,41 @@ export default class AngryMouseExtension extends Extension {
         if (!this._actor)
             return;
         const sprite = this._cursorTracker.get_sprite();
-        if (!sprite) {
+        const width = sprite ? sprite.get_width() : 0;
+        const height = sprite ? sprite.get_height() : 0;
+        const validSprite = Number.isFinite(width) && Number.isFinite(height) &&
+            width > 0 && height > 0;
+        // shortcut: Deskflow handoff detection uses its 1×1 cursor; larger blank cursors need another signal.
+        const shakeSuppressed = !validSprite || width === 1 && height === 1;
+        if (shakeSuppressed !== this._shakeSuppressed) {
+            this._shakeSuppressed = shakeSuppressed;
+            this._shakeDetector.reset();
+            this._shakeGestureActive = false;
+            this._shakeHeld = false;
+            this._clearSource('_shakeTimeoutId');
+            this._updateActive();
+            if (!this._desiredActive)
+                this._hideCursor(true);
+        }
+        if (!validSprite) {
+            ++this._animationSerial;
+            this._actor.remove_all_transitions();
             this._contentReady = false;
             this._actor.hide();
             this._restorePointerVisibility();
             return;
         }
 
-        const scale = Math.max(1, this._cursorTracker.get_scale());
-        const width = sprite.get_width() / scale;
-        const height = sprite.get_height() / scale;
         const [hotX, hotY] = this._cursorTracker.get_hot();
         this._actor.set_content(Clutter.TextureContent.new_from_texture(sprite, null));
-        this._actor.set_size(width, height);
-        this._actor.set_pivot_point(width ? hotX / width : 0, height ? hotY / height : 0);
-        this._cursorWidth = width;
-        this._cursorHeight = height;
-        this._hotX = hotX;
-        this._hotY = hotY;
+        // A fixed actor height keeps sprite changes from amplifying an animation.
+        this._actor.set_size(width / height, 1);
+        this._actor.set_pivot_point(hotX / width, hotY / height);
+        this._hotX = hotX / height;
+        this._hotY = hotY / height;
         this._contentReady = true;
         this._positionCursor();
-        if (this._desiredActive)
+        if (this._desiredActive && !this._actor.visible)
             this._showCursor();
     }
 
@@ -498,9 +566,8 @@ export default class AngryMouseExtension extends Extension {
         }
 
         const wasVisible = this._actor.visible;
-        const targetScale = 254 * this._settings.get_double('cursor-size') /
-            10 / this._cursorHeight;
-        const serial = ++this._animationSerial;
+        const targetScale = 254 * this._settings.get_double('cursor-size') / 10;
+        ++this._animationSerial;
         this._actor.remove_all_transitions();
         this._positionCursor();
         this._actor.show();
@@ -512,10 +579,6 @@ export default class AngryMouseExtension extends Extension {
             scale_y: targetScale,
             duration: this._settings.get_int('animation-duration-ms'),
             mode: Clutter.AnimationMode.EASE_IN_OUT_CUBIC,
-            onComplete: () => {
-                if (serial !== this._animationSerial)
-                    return;
-            },
         });
         this._enforcePointerVisibility();
     }
@@ -561,10 +624,6 @@ export default class AngryMouseExtension extends Extension {
         this._savedPointerVisible = null;
     }
 
-    _setLaserActive(active) {
-        this._applyLaserActive(Boolean(active));
-    }
-
     _resetLaser(reason = 'reset') {
         const pressed = this._laserEnabled && this._laserShortcutIsPressed();
         this._laserActivation.reset(pressed);
@@ -591,6 +650,8 @@ export default class AngryMouseExtension extends Extension {
     }
 
     _laserShortcutIsPressed(state = global.get_pointer()[2]) {
+        if (state & Clutter.ModifierType.MOD5_MASK)
+            state |= Clutter.ModifierType.MOD1_MASK;
         return this._laserModifierMask !== 0 &&
             (state & LASER_MODIFIER_MASK) === this._laserModifierMask;
     }
@@ -644,7 +705,8 @@ export default class AngryMouseExtension extends Extension {
         });
     }
 
-    _applyLaserActive(active) {
+    _setLaserActive(active) {
+        active = Boolean(active);
         if (this._laserActive === active)
             return;
         if (active) {
@@ -818,7 +880,11 @@ export default class AngryMouseExtension extends Extension {
     }
 
     _hasAny(...symbols) {
-        return symbols.some(symbol => symbol !== undefined && this._pressed.has(symbol));
+        for (const symbol of this._pressed.values()) {
+            if (symbol !== undefined && symbols.includes(symbol))
+                return true;
+        }
+        return false;
     }
 
     _controlSide(symbol) {

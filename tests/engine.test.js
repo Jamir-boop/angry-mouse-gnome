@@ -78,6 +78,44 @@ segments = trail.segments(1010);
 assert(segments.length > 0 && segments.every(segment => segment.start.x >= 100),
     'expires separate strokes independently');
 
+const pausedTrail = new LaserTrail();
+pausedTrail.start(0, 0, 0);
+pausedTrail.add(100, 0, 900);
+segments = pausedTrail.segments(1000);
+assert(segments.length === 1 && segments[0].start.time === 0 && segments[0].end.time === 900,
+    'keeps an expired start point while its segment end is fresh');
+const pausedEnd = segments[0].end;
+assert(pausedTrail.segments(1899).length === 1,
+    'keeps a segment until one second after its end point');
+assert(pausedTrail.segments(1900).length === 0,
+    'expires a segment exactly one second after its end point');
+assert(pausedTrail._activeStroke.samples.length === 1,
+    'retains the last active point after all segments expire');
+pausedTrail.add(200, 0, 5000);
+segments = pausedTrail.segments(5000);
+assert(segments.length === 1 && segments[0].start === pausedEnd && segments[0].end.x === 144,
+    'draws the first movement after a long pause with the same smoothing');
+pausedTrail.end(144, 0, 5000);
+assert(pausedTrail.segments(5999).length === 1,
+    'keeps a fresh segment after its stroke ends');
+assert(pausedTrail.segments(6000).length === 0 && pausedTrail._strokes.length === 0,
+    'removes an inactive stroke when its final segment expires');
+
+const continuousTrail = new LaserTrail();
+continuousTrail.start(0, 0, 0);
+for (let i = 1; i <= 300; i++) {
+    continuousTrail.add(i, 0, i * 10);
+    continuousTrail.segments(i * 10);
+    assert(continuousTrail._activeStroke.samples.length <= 101,
+        'bounds retained points to one second of movement and its start point');
+}
+assert(continuousTrail.segments(4000).length === 0 &&
+    continuousTrail._activeStroke.samples.length === 1,
+    'a paused active stroke retains only its last point');
+const lastPoint = continuousTrail._activeStroke.last;
+continuousTrail.end(lastPoint.x, lastPoint.y, 4000);
+assert(continuousTrail._strokes.length === 0, 'removes a completed stroke with no live segments');
+
 const laserActivation = new LaserActivation();
 assert(laserActivation.update(0, true), 'hold mode activates while pressed');
 assert(!laserActivation.update(0, false), 'hold mode stops on release');

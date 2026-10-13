@@ -192,7 +192,9 @@ export class LaserTrail {
     _prune(now) {
         for (let i = this._strokes.length - 1; i >= 0; i--) {
             const stroke = this._strokes[i];
-            while (stroke.samples.length && now - stroke.samples[0].time >= LASER_LIFETIME_MS)
+            // Segment expiry follows its end point, so keep the required start point.
+            while (stroke.samples.length > 1 &&
+                now - stroke.samples[1].time >= LASER_LIFETIME_MS)
                 stroke.samples.shift();
             if (stroke !== this._activeStroke && stroke.samples.length < 2)
                 this._strokes.splice(i, 1);
