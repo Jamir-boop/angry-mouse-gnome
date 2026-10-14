@@ -87,8 +87,6 @@ export class KeyboardObserver {
     }
 
     stop() {
-        if (this._stopped)
-            return;
         this._stopped = true;
         this.ready = false;
         this._cancellable?.cancel();
