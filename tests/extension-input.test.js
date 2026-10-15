@@ -369,7 +369,7 @@ wayland = false;
 pointer[2] = 0;
 setting('keyboard-enabled', true);
 const observer = observers[0];
-assert(observer.started && observer.path.endsWith('/keyboard.js'), 'X11 starts its passive observer');
+assert(observer.started && observer.path.endsWith('/keyboard-helper.js'), 'X11 starts its passive observer');
 setting('activation-method', 0);
 setting('activation-mode', 1);
 key(Clutter.KEY_Control_L, 37, true);

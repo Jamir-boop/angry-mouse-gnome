@@ -59,11 +59,12 @@ for test in tests/*.test.js; do
   gjs -m "$test" || exit 1
 done
 glib-compile-schemas --strict --dry-run schemas
-eslint engine.js extension.js keyboard.js prefs.js tests/*.test.js
+eslint engine.js extension.js keyboard.js keyboard-helper.js prefs.js tests/*.test.js
 mkdir -p dist
 gnome-extensions pack --force \
   --schema=schemas/org.gnome.shell.extensions.angry-mouse.gschema.xml \
   --extra-source=engine.js --extra-source=keyboard.js \
+  --extra-source=keyboard-helper.js \
   --extra-source=LICENSE --out-dir=dist .
 ```
 

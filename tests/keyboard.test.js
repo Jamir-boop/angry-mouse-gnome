@@ -19,7 +19,7 @@ for (const line of [
 ])
     assert(parseKeyEvent(line) === null, 'malformed or oversized key data is rejected');
 
-const helperPath = GLib.build_filenamev([GLib.path_get_dirname(System.programPath), '..', 'keyboard.js']);
+const helperPath = GLib.build_filenamev([GLib.path_get_dirname(System.programPath), '..', 'keyboard-helper.js']);
 const launcher = new Gio.SubprocessLauncher({
     flags: Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
 });
@@ -28,7 +28,7 @@ const entrypoint = launcher.spawnv(['gjs', '-m', helperPath]);
 const [, output, error] = entrypoint.communicate_utf8(null, null);
 assert(!entrypoint.get_successful() && output === '' &&
     error.includes('Keyboard observer failed to start'),
-    'direct module execution reports startup failure instead of silently skipping the entry point');
+    'the standalone helper reports startup failure when no X11 display is available');
 
 const directory = GLib.dir_make_tmp('angry-mouse-keyboard-test-XXXXXX');
 const scripts = [];

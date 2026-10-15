@@ -305,7 +305,7 @@ export default class AngryMouseExtension extends Extension {
         }
         if (this._keyboardObserver)
             return;
-        this._keyboardObserver = new KeyboardObserver(`${this.path}/keyboard.js`,
+        this._keyboardObserver = new KeyboardObserver(`${this.path}/keyboard-helper.js`,
             (keycode, symbol, pressed, time) => this._guard('keyboard-event',
                 () => this._onKeyEvent(keycode, symbol, pressed, time)),
             reason => this._guard('keyboard-observer-stopped', () => {
